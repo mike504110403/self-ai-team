@@ -187,8 +187,8 @@ async function answerCallbackQuery(id) {
 }
 
 // --- Claude CLI 執行 ---
-const IDLE_ALERT_MS = 3 * 60 * 1000;      // 3 分鐘無輸出 → 回報 Telegram
-const PROGRESS_INTERVAL_MS = 2 * 60 * 1000; // 每 2 分鐘進度通知
+const IDLE_ALERT_MS = 11 * 60 * 1000;       // 11 分鐘無輸出 → 回報 Telegram
+const PROGRESS_INTERVAL_MS = 10 * 60 * 1000; // 每 10 分鐘進度通知
 
 // --- Session 管理（上下文持久化）---
 const SESSIONS_FILE = path.join(os.homedir(), '.claude', 'bridge-sessions.json');
