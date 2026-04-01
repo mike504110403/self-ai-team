@@ -1,0 +1,38 @@
+{
+  "name": "brain-bridge",
+  "version": "1.0.0",
+  "description": "AI 開發團隊 - Telegram Bridge 選單列應用",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "ELECTRON_RUN_AS_NODE= electron .",
+    "dev": "ELECTRON_RUN_AS_NODE= electron . --dev",
+    "build": "electron-builder --mac",
+    "build:dmg": "electron-builder --mac dmg",
+    "build:zip": "electron-builder --mac zip"
+  },
+  "build": {
+    "appId": "com.mike.brain-bridge",
+    "productName": "BrainBridge",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "target": ["dmg", "zip"],
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*"
+    ]
+  },
+  "author": "Mike",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "menubar": "^9.5.0"
+  }
+}

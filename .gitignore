@@ -1,0 +1,29 @@
+# 依賴
+node_modules/
+brain-bridge/node_modules/
+brain-bridge/dist/
+
+# 環境變數（含敏感資訊）
+.env
+.env.local
+.env*.local
+
+# macOS
+.DS_Store
+
+# 編輯器
+.vscode/
+.idea/
+
+# 日誌
+*.log
+bridge.log
+
+# 打包產物
+dist/
+*.dmg
+*.zip
+
+# Session 狀態
+bridge-sessions.json
+bridge-projects.json
