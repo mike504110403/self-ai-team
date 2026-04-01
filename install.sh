@@ -27,6 +27,37 @@ echo "✅ Node.js $(node --version)"
 echo "✅ Claude Code CLI 已安裝"
 echo ""
 
+# --- 檢查 .env ---
+if [ "$1" != "--update" ]; then
+  if [ ! -f "$SCRIPT_DIR/.env" ] && [ ! -f "$CLAUDE_DIR/.env" ]; then
+    echo "⚠️  尚未設定環境變數！"
+    echo ""
+    echo "   請先完成以下步驟："
+    echo "   1. cp .env.example .env"
+    echo "   2. 編輯 .env，填入 Telegram Bot Token 和 Chat ID"
+    echo ""
+    echo "   取得方式："
+    echo "   • Bot Token → 在 Telegram 找 @BotFather，發 /newbot"
+    echo "   • Chat ID  → 對你的 Bot 發任意訊息，然後瀏覽器打開："
+    echo "     https://api.telegram.org/bot<你的TOKEN>/getUpdates"
+    echo "     找到 \"chat\":{\"id\": 後面的數字"
+    echo ""
+    read -p "   已完成 .env 設定了嗎？(y/N) " ENV_READY
+    if [ "$ENV_READY" != "y" ] && [ "$ENV_READY" != "Y" ]; then
+      echo ""
+      echo "   請先完成 .env 設定後再執行 ./install.sh"
+      exit 0
+    fi
+  fi
+
+  # 從專案 .env 或 ~/.claude/.env 讀取
+  if [ -f "$SCRIPT_DIR/.env" ]; then
+    source "$SCRIPT_DIR/.env" 2>/dev/null
+    # 同步到 ~/.claude/.env
+    cp "$SCRIPT_DIR/.env" "$CLAUDE_DIR/.env" 2>/dev/null || true
+  fi
+fi
+
 # --- 建立目錄 ---
 mkdir -p "$CLAUDE_DIR/commands"
 mkdir -p "$CLAUDE_DIR/templates"
@@ -59,49 +90,32 @@ if [ "$1" = "--update" ]; then
   exit 0
 fi
 
-# --- Telegram 設定 ---
-echo ""
-echo "📱 Telegram 設定"
-echo "   你需要一個 Telegram Bot Token 和你的 Chat ID。"
-echo "   如果還沒有，請先跟 @BotFather 建立 Bot。"
-echo ""
+# --- Telegram 設定（從 .env 讀取）---
+echo "📱 Telegram 設定..."
 
-EXISTING_TOKEN=""
-EXISTING_CHAT_ID=""
-if [ -f "$CLAUDE_DIR/.env" ]; then
-  EXISTING_TOKEN=$(grep "TELEGRAM_BOT_TOKEN" "$CLAUDE_DIR/.env" 2>/dev/null | cut -d= -f2)
-  EXISTING_CHAT_ID=$(grep "TELEGRAM_CHAT_ID" "$CLAUDE_DIR/.env" 2>/dev/null | cut -d= -f2)
-fi
-
-if [ -n "$EXISTING_TOKEN" ] && [ -n "$EXISTING_CHAT_ID" ]; then
-  echo "   已偵測到現有設定："
-  echo "   Token: ${EXISTING_TOKEN:0:10}..."
-  echo "   Chat ID: $EXISTING_CHAT_ID"
-  read -p "   要保留嗎？(Y/n) " KEEP_TG
-  if [ "$KEEP_TG" = "n" ] || [ "$KEEP_TG" = "N" ]; then
-    EXISTING_TOKEN=""
-    EXISTING_CHAT_ID=""
+# 優先從 ~/.claude/.env 讀，再從專案 .env 讀
+BOT_TOKEN=""
+CHAT_ID=""
+for ENV_FILE in "$CLAUDE_DIR/.env" "$SCRIPT_DIR/.env"; do
+  if [ -f "$ENV_FILE" ]; then
+    _token=$(grep "^TELEGRAM_BOT_TOKEN=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    _chatid=$(grep "^TELEGRAM_CHAT_ID=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    [ -n "$_token" ] && BOT_TOKEN="$_token"
+    [ -n "$_chatid" ] && CHAT_ID="$_chatid"
   fi
-fi
+done
 
-if [ -z "$EXISTING_TOKEN" ]; then
-  read -p "   Telegram Bot Token: " BOT_TOKEN
-  read -p "   你的 Chat ID（先對 Bot 發訊息，再執行此腳本取得）: " CHAT_ID
-
-  if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
-    echo ""
-    echo "   ⚠️  Token 或 Chat ID 為空，跳過 Telegram 設定。"
-    echo "   之後可以手動編輯 ~/.claude/.env"
-  else
-    cat > "$CLAUDE_DIR/.env" << EOF
+if [ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
+  echo "   ✅ Token: ${BOT_TOKEN:0:10}..."
+  echo "   ✅ Chat ID: $CHAT_ID"
+  # 確保 ~/.claude/.env 有最新的值
+  cat > "$CLAUDE_DIR/.env" << EOF
 TELEGRAM_BOT_TOKEN=$BOT_TOKEN
 TELEGRAM_CHAT_ID=$CHAT_ID
 EOF
-    echo "   ✅ Telegram 設定已儲存到 ~/.claude/.env"
-  fi
 else
-  BOT_TOKEN="$EXISTING_TOKEN"
-  CHAT_ID="$EXISTING_CHAT_ID"
+  echo "   ⚠️  .env 中缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID"
+  echo "   請編輯 .env 補齊後重新執行 ./install.sh"
 fi
 
 # --- 設定 MCP Server ---
