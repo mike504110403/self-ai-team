@@ -121,11 +121,13 @@ function telegramRequest(method, body) {
   });
 }
 
-async function sendMessage(text, buttons) {
+async function sendMessage(text, buttons, replyToMessageId) {
   // 自動分段（Telegram 最大 4096 字元）
   const limit = 3800;
   const chunks = [];
   for (let i = 0; i < text.length; i += limit) chunks.push(text.slice(i, i + limit));
+
+  let lastSentMsgId = null;
 
   for (let i = 0; i < chunks.length; i++) {
     const replyMarkup = (buttons && i === chunks.length - 1) ? {
@@ -134,26 +136,29 @@ async function sendMessage(text, buttons) {
       )
     } : undefined;
 
+    // 只有第一段 reply 原始訊息，後續段不 reply
+    const replyId = (i === 0 && replyToMessageId) ? replyToMessageId : undefined;
+
+    const baseBody = {
+      chat_id: CHAT_ID, text: chunks[i],
+      ...(replyId && { reply_to_message_id: replyId }),
+      ...(replyMarkup && { reply_markup: replyMarkup })
+    };
+
     // 嘗試順序：Markdown → 純文字（三次機會確保一定送達）
     let sent = false;
 
     // 嘗試 1：Markdown
     try {
-      const res = await telegramRequest('sendMessage', {
-        chat_id: CHAT_ID, text: chunks[i], parse_mode: 'Markdown',
-        ...(replyMarkup && { reply_markup: replyMarkup })
-      });
-      if (res.ok) { sent = true; continue; }
+      const res = await telegramRequest('sendMessage', { ...baseBody, parse_mode: 'Markdown' });
+      if (res.ok) { lastSentMsgId = res.result.message_id; sent = true; continue; }
     } catch {}
 
     // 嘗試 2：不帶 parse_mode（純文字）
     if (!sent) {
       try {
-        const res = await telegramRequest('sendMessage', {
-          chat_id: CHAT_ID, text: chunks[i],
-          ...(replyMarkup && { reply_markup: replyMarkup })
-        });
-        if (res.ok) { sent = true; continue; }
+        const res = await telegramRequest('sendMessage', baseBody);
+        if (res.ok) { lastSentMsgId = res.result.message_id; sent = true; continue; }
       } catch {}
     }
 
@@ -161,17 +166,19 @@ async function sendMessage(text, buttons) {
     if (!sent) {
       try {
         const cleaned = chunks[i]
-          .replace(/[*_`\[\]()~>#+\-=|{}.!]/g, '') // 移除所有 Markdown 字元
+          .replace(/[*_`\[\]()~>#+\-=|{}.!]/g, '')
           .slice(0, 4000);
-        await telegramRequest('sendMessage', {
-          chat_id: CHAT_ID, text: cleaned || '(訊息格式有誤，請查看 Bridge Log)',
-          ...(replyMarkup && { reply_markup: replyMarkup })
+        const res = await telegramRequest('sendMessage', {
+          ...baseBody, text: cleaned || '(訊息格式有誤，請查看 Bridge Log)'
         });
+        if (res.ok) lastSentMsgId = res.result.message_id;
       } catch (e) {
         console.error(`[Bridge] sendMessage 最終失敗（chunk ${i+1}/${chunks.length}）：`, e.message);
       }
     }
   }
+
+  return lastSentMsgId;
 }
 
 async function answerCallbackQuery(id) {
@@ -333,9 +340,14 @@ function runClaudeTask(description, prompt, options = {}) {
 // 防止同一訊息被重複處理
 const processingSet = new Set();
 
-async function handleMessage(text) {
+async function handleMessage(text, messageId, replyContext) {
   const trimmed = text.trim();
   if (!trimmed) return;
+
+  // 如果老闆是 reply 某則訊息，把被 reply 的內容當作上下文
+  const contextPrefix = replyContext
+    ? `（老闆回覆了之前的訊息「${replyContext.slice(0, 200)}」）\n`
+    : '';
 
   // 內建指令
   if (trimmed === '/start' || trimmed === '/help') {
@@ -491,16 +503,20 @@ async function handleMessage(text) {
     ack = `[BRAIN] 收到，思考中...`;
   }
 
-  await sendMessage(ack);
+  const ackMsgId = await sendMessage(ack, null, messageId);
 
-  const result = await runClaudeTask(trimmed.slice(0, 60), prompt);
+  // 如果有 reply context，把它加到 prompt 裡讓大腦知道
+  const fullPrompt = contextPrefix ? `${contextPrefix}${prompt}` : prompt;
+
+  const result = await runClaudeTask(trimmed.slice(0, 60), fullPrompt);
 
   if (result.success && result.output) {
-    await sendMessage(result.output);
+    await sendMessage(result.output, null, messageId);
   } else if (!result.success) {
     const errMsg = result.error || '未知錯誤';
     await sendMessage(
-      `[BRAIN] ❌ 執行失敗（${result.duration}s）\n\`\`\`\n${errMsg.slice(0, 800)}\n\`\`\``
+      `[BRAIN] ❌ 執行失敗（${result.duration}s）\n\`\`\`\n${errMsg.slice(0, 800)}\n\`\`\``,
+      null, messageId
     );
   }
 }
@@ -551,16 +567,25 @@ async function poll() {
 
         // 一般文字訊息
         if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
-          const msgId = `msg_${update.message.message_id}`;
-          if (!processingSet.has(msgId)) {
-            processingSet.add(msgId);
+          const dedupeId = `msg_${update.message.message_id}`;
+          if (!processingSet.has(dedupeId)) {
+            processingSet.add(dedupeId);
             const text = update.message.text;
-            console.log(`[Bridge] 收到：${text}`);
+            const messageId = update.message.message_id;
+
+            // 解析 reply_to_message：老闆 reply 了 brain 的哪則訊息
+            const replyContext = update.message.reply_to_message?.text || null;
+            if (replyContext) {
+              console.log(`[Bridge] 收到（reply）：${text}`);
+              console.log(`[Bridge]   ↳ 回覆的訊息：${replyContext.slice(0, 80)}...`);
+            } else {
+              console.log(`[Bridge] 收到：${text}`);
+            }
 
             if (text.startsWith('/parallel ')) {
               handleParallel(text).catch(e => console.error('[Bridge] parallel 錯誤：', e.message));
             } else {
-              handleMessage(text).catch(e => console.error('[Bridge] 處理錯誤：', e.message));
+              handleMessage(text, messageId, replyContext).catch(e => console.error('[Bridge] 處理錯誤：', e.message));
             }
           }
         }
@@ -572,8 +597,9 @@ async function poll() {
             processingSet.add(cbId);
             await answerCallbackQuery(update.callback_query.id);
             const data = update.callback_query.data;
+            const origMsgId = update.callback_query.message?.message_id;
             console.log(`[Bridge] 按鈕：${data}`);
-            handleMessage(data).catch(e => console.error('[Bridge] 按鈕處理錯誤：', e.message));
+            handleMessage(data, origMsgId, null).catch(e => console.error('[Bridge] 按鈕處理錯誤：', e.message));
           }
         }
       }
