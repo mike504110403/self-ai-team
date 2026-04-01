@@ -187,29 +187,8 @@ async function answerCallbackQuery(id) {
 }
 
 // --- Claude CLI 執行 ---
-// --- 動態超時設定 ---
-const TIMEOUT_MAP = {
-  '/plan':   10 * 60 * 1000,  // 10 分鐘（PM + SA 並行）
-  '/sprint': 15 * 60 * 1000,  // 15 分鐘（三代理並行開發）
-  '/qa':     10 * 60 * 1000,  // 10 分鐘
-  '/brain':   5 * 60 * 1000,  // 5 分鐘
-  default:    5 * 60 * 1000,  // 5 分鐘
-};
-const IDLE_TIMEOUT_MS = 90 * 1000;
-const PROGRESS_INTERVAL_MS = 2 * 60 * 1000; // 每 2 分鐘通知進度
-let nextTimeoutOverride = null; // /timeout 指令臨時覆蓋
-
-function getTimeoutForPrompt(prompt) {
-  if (nextTimeoutOverride) {
-    const t = nextTimeoutOverride;
-    nextTimeoutOverride = null;
-    return t;
-  }
-  for (const [prefix, ms] of Object.entries(TIMEOUT_MAP)) {
-    if (prefix !== 'default' && prompt.startsWith(prefix)) return ms;
-  }
-  return TIMEOUT_MAP.default;
-}
+const IDLE_ALERT_MS = 3 * 60 * 1000;      // 3 分鐘無輸出 → 回報 Telegram
+const PROGRESS_INTERVAL_MS = 2 * 60 * 1000; // 每 2 分鐘進度通知
 
 // --- Session 管理（上下文持久化）---
 const SESSIONS_FILE = path.join(os.homedir(), '.claude', 'bridge-sessions.json');
@@ -248,16 +227,14 @@ function clearSession() {
 function runClaudeTask(description, prompt, options = {}) {
   const taskId = taskIdCounter++;
   const startTime = new Date();
-  const timeoutMs = getTimeoutForPrompt(prompt);
 
   return new Promise((resolve) => {
-    console.log(`\n[Bridge] ▶ 任務 #${taskId}：${description}（超時 ${Math.round(timeoutMs/60000)}m）`);
+    console.log(`\n[Bridge] ▶ 任務 #${taskId}：${description}`);
 
     const args = ['--print', '--dangerously-skip-permissions'];
     if (options.model) args.push('--model', options.model);
 
     // 上下文持久化：--continue 延續同目錄下最近的對話
-    // /sprint 會先 clearSession() 所以不會帶 --continue
     if (!options.newSession) {
       args.push('--continue');
     }
@@ -276,46 +253,32 @@ function runClaudeTask(description, prompt, options = {}) {
     let stderr = '';
     let lastActivity = Date.now();
     let resolved = false;
+    let idleAlerted = false;
 
     function finish(code, reason) {
       if (resolved) return;
       resolved = true;
       clearInterval(watchdog);
       clearInterval(progressTimer);
-      clearTimeout(hardTimeout);
       runningTasks.delete(taskId);
       const dur = Math.round((Date.now() - startTime.getTime()) / 1000);
       const suffix = reason ? ` [${reason}]` : '';
       console.log(`[Bridge] ■ 任務 #${taskId} 完成（${dur}s, exit ${code}${suffix}）`);
-
-      // 嘗試從 stderr 擷取 session ID（claude CLI 會輸出）
-      const sidMatch = stderr.match(/session[:\s]+([a-f0-9-]{36})/i) || stderr.match(/resuming[:\s]+([a-f0-9-]{36})/i);
-      if (sidMatch) saveSessionId(sidMatch[1]);
-
       resolve({ taskId, description, success: code === 0, output: stdout.trim(), error: stderr.trim(), duration: dur });
     }
 
-    // 硬超時
-    const hardTimeout = setTimeout(() => {
-      if (!resolved) {
-        console.log(`[Bridge] ⏰ 任務 #${taskId} 硬超時（${Math.round(timeoutMs/60000)}m），強制中止`);
-        sendMessage(`[BRAIN] ⏰ 任務超時（${Math.round(timeoutMs/60000)}分鐘），已中止\n> ${description.slice(0, 50)}\n\n部分結果：\n${stdout.slice(-500) || '(無)'}`).catch(() => {});
-        proc.kill('SIGKILL');
-        finish(-1, '超時');
-      }
-    }, timeoutMs);
-
-    // 心跳偵測：90 秒無新輸出（只寫 log，不發 Telegram）
+    // 心跳偵測：3 分鐘無輸出 → 回報 Telegram（不殺進程）
     const watchdog = setInterval(() => {
       const idle = Date.now() - lastActivity;
-      if (idle > IDLE_TIMEOUT_MS && !resolved) {
-        const idleSec = Math.round(idle / 1000);
-        console.log(`[Bridge] ⚠ 任務 #${taskId} 已 ${idleSec}s 無輸出`);
-        lastActivity = Date.now();
+      if (idle > IDLE_ALERT_MS && !resolved && !idleAlerted) {
+        const idleMin = Math.round(idle / 60000);
+        console.log(`[Bridge] ⚠ 任務 #${taskId} 已 ${idleMin}m 無輸出`);
+        sendMessage(`[BRAIN] ⚠ 任務 #${taskId} 已 ${idleMin} 分鐘無回應，可能卡住\n> ${description.slice(0, 50)}\n\n發 /stop ${taskId} 可手動中止`).catch(() => {});
+        idleAlerted = true; // 只提醒一次
       }
     }, 30000);
 
-    // 進度通知：每 2 分鐘告訴老闆還在跑
+    // 進度通知：每 2 分鐘
     const progressTimer = setInterval(() => {
       if (!resolved) {
         const elapsed = Math.round((Date.now() - startTime.getTime()) / 60000);
@@ -323,8 +286,8 @@ function runClaudeTask(description, prompt, options = {}) {
       }
     }, PROGRESS_INTERVAL_MS);
 
-    proc.stdout.on('data', d => { lastActivity = Date.now(); stdout += d.toString(); process.stdout.write(d); });
-    proc.stderr.on('data', d => { lastActivity = Date.now(); stderr += d.toString(); });
+    proc.stdout.on('data', d => { lastActivity = Date.now(); idleAlerted = false; stdout += d.toString(); process.stdout.write(d); });
+    proc.stderr.on('data', d => { lastActivity = Date.now(); idleAlerted = false; stderr += d.toString(); });
 
     proc.on('close', (code) => finish(code));
 
@@ -367,22 +330,9 @@ async function handleMessage(text, messageId, replyContext) {
       `/tasks - 執行中的任務\n` +
       `/stop {id} - 中止任務\n` +
       `/parallel {cmd1} | {cmd2} - 並行執行\n` +
-      `/timeout {分鐘} - 設定下一個任務的超時\n` +
       `/reset - 清除對話記憶，重新開始\n\n` +
       `直接傳訊息 → 大腦處理`
     );
-    return;
-  }
-
-  // --- 超時與 Session 指令 ---
-  if (trimmed.startsWith('/timeout ')) {
-    const mins = parseInt(trimmed.slice(9));
-    if (mins > 0 && mins <= 60) {
-      nextTimeoutOverride = mins * 60 * 1000;
-      await sendMessage(`[BRAIN] ⏱ 下一個任務超時設為 ${mins} 分鐘`);
-    } else {
-      await sendMessage(`[BRAIN] 請輸入 1-60 之間的分鐘數`);
-    }
     return;
   }
 
