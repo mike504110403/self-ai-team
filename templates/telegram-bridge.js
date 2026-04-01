@@ -256,10 +256,10 @@ function runClaudeTask(description, prompt, options = {}) {
     const args = ['--print', '--dangerously-skip-permissions'];
     if (options.model) args.push('--model', options.model);
 
-    // Session resume：同專案同 Sprint 內保持上下文
-    const sessionId = getSessionId();
-    if (sessionId && !options.noResume) {
-      args.push('--resume', sessionId);
+    // 上下文持久化：--continue 延續同目錄下最近的對話
+    // /sprint 會先 clearSession() 所以不會帶 --continue
+    if (!options.newSession) {
+      args.push('--continue');
     }
 
     args.push(prompt);
@@ -486,10 +486,8 @@ async function handleMessage(text, messageId, replyContext) {
     prompt = trimmed;
     ack = `[BRAIN] 📋 收到規劃需求，啟動 PM + SA...\n> ${trimmed.slice(6)}`;
   } else if (trimmed.match(/^\/sprint\b/)) {
-    // 新 Sprint → 自動重置 session
-    clearSession();
     prompt = trimmed;
-    ack = `[BRAIN] 🚀 啟動 Sprint ${trimmed.slice(8).trim()}...（對話記憶已重置）`;
+    ack = `[BRAIN] 🚀 啟動 Sprint ${trimmed.slice(8).trim()}...（新對話）`;
   } else if (trimmed.match(/^\/qa\b/)) {
     prompt = trimmed;
     ack = `[BRAIN] 🔍 啟動 QA 測試 Sprint ${trimmed.slice(4).trim()}...`;
@@ -507,14 +505,31 @@ async function handleMessage(text, messageId, replyContext) {
   // 如果有 reply context，把它加到 prompt 裡讓大腦知道
   const fullPrompt = contextPrefix ? `${contextPrefix}${prompt}` : prompt;
 
-  const result = await runClaudeTask(trimmed.slice(0, 60), fullPrompt);
+  // /sprint 開新 session，其他指令延續上下文
+  const isNewSession = trimmed.match(/^\/sprint\b/);
+  const result = await runClaudeTask(trimmed.slice(0, 60), fullPrompt, { newSession: !!isNewSession });
 
-  if (result.success && result.output) {
+  // 偵測限流（可能出現在 stdout 或 stderr）
+  const allOutput = `${result.output}\n${result.error}`;
+  const rateLimitMatch = allOutput.match(/hit your limit.*resets?\s+(\S+)/i)
+    || allOutput.match(/rate.?limit/i)
+    || allOutput.match(/too many requests/i);
+
+  if (rateLimitMatch) {
+    const resetInfo = allOutput.match(/resets?\s+(.+?)(\n|$)/i);
+    await sendMessage(
+      `[BRAIN] ⏸ Claude API 已達使用上限\n重置時間：${resetInfo?.[1] || '稍後'}\n\n請等限制解除後再試`,
+      null, messageId
+    );
+  } else if (result.success && result.output) {
     await sendMessage(result.output, null, messageId);
   } else if (!result.success) {
-    const errMsg = result.error || '未知錯誤';
+    // 優先用 stderr，沒有就用 stdout 的最後幾行當錯誤訊息
+    const errMsg = result.error
+      || result.output.split('\n').slice(-5).join('\n')
+      || '未知錯誤（stderr 和 stdout 都是空的）';
     await sendMessage(
-      `[BRAIN] ❌ 執行失敗（${result.duration}s）\n\`\`\`\n${errMsg.slice(0, 800)}\n\`\`\``,
+      `[BRAIN] ❌ 執行失敗（${result.duration}s）\n${errMsg.slice(0, 1000)}`,
       null, messageId
     );
   }
