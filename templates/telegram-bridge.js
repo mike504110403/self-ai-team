@@ -305,13 +305,12 @@ function runClaudeTask(description, prompt, options = {}) {
       }
     }, timeoutMs);
 
-    // 心跳偵測：90 秒無新輸出
+    // 心跳偵測：90 秒無新輸出（只寫 log，不發 Telegram）
     const watchdog = setInterval(() => {
       const idle = Date.now() - lastActivity;
       if (idle > IDLE_TIMEOUT_MS && !resolved) {
         const idleSec = Math.round(idle / 1000);
         console.log(`[Bridge] ⚠ 任務 #${taskId} 已 ${idleSec}s 無輸出`);
-        sendMessage(`[BRAIN] ⚠ 任務 #${taskId} 已 ${idleSec}s 無回應\n發 /stop ${taskId} 可中止`).catch(() => {});
         lastActivity = Date.now();
       }
     }, 30000);
