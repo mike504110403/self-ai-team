@@ -100,7 +100,7 @@ function buildContextMenu() {
     { type: 'separator' },
     { label: '切換專案', submenu: projectItems.length > 0 ? projectItems : [{ label: '(無已註冊專案)', enabled: false }] },
     { label: '開啟面板', click: showPopup },
-    { label: '查看 Log', click: () => shell.openPath(path.join(app.getPath('home'), '.claude', 'bridge.log')) },
+    { label: '查看 Log', click: () => shell.openPath(path.join(app.getPath('home'), '.claude', `bridge-${new Date().toISOString().slice(0,10)}.log`)) },
     { type: 'separator' },
     { label: '開機自動啟動', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
       click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }) },
@@ -136,7 +136,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.on('add-project', (_, { name, dir }) => { projectManager.add(name, dir); sendStatusToUI(); });
-  ipcMain.on('open-log', () => shell.openPath(path.join(app.getPath('home'), '.claude', 'bridge.log')));
+  ipcMain.on('open-log', () => shell.openPath(path.join(app.getPath('home'), '.claude', `bridge-${new Date().toISOString().slice(0,10)}.log`)));
 
   // Bridge
   bridge = new BridgeProcess({

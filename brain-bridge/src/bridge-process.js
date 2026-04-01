@@ -38,19 +38,43 @@ class BridgeProcess {
     } catch { /* file not found, ignore */ }
   }
 
+  _getLogPath() {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    return path.join(os.homedir(), '.claude', `bridge-${today}.log`);
+  }
+
+  _cleanOldLogs() {
+    const logDir = path.join(os.homedir(), '.claude');
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      const files = fs.readdirSync(logDir);
+      for (const f of files) {
+        if (f.startsWith('bridge-') && f.endsWith('.log') && f !== `bridge-${today}.log`) {
+          fs.unlinkSync(path.join(logDir, f));
+          console.log(`[Bridge] 🗑 刪除舊 log：${f}`);
+        }
+      }
+      // 也刪除舊的 bridge.log（無日期版本）
+      const oldLog = path.join(logDir, 'bridge.log');
+      if (fs.existsSync(oldLog)) fs.unlinkSync(oldLog);
+    } catch { /* ignore */ }
+  }
+
   _addLog(line) {
     const entry = `[${new Date().toLocaleTimeString('zh-TW')}] ${line}`;
     this.logs.push(entry);
     if (this.logs.length > 200) this.logs.shift();
     this.onLog?.(entry);
 
-    // 寫入 log 檔
-    const logPath = path.join(os.homedir(), '.claude', 'bridge.log');
-    fs.appendFileSync(logPath, entry + '\n');
+    // 寫入當天 log 檔
+    fs.appendFileSync(this._getLogPath(), entry + '\n');
   }
 
   start(projectDir) {
     if (this.running) return;
+
+    // 啟動時清除今天以前的 log
+    this._cleanOldLogs();
 
     const env = this._loadEnv(projectDir);
 
