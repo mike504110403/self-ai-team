@@ -104,7 +104,13 @@ QA 完成後，大腦讀取報告並分類：
 2. **開發問題**（代理要修復）
    → 開 hotfix branch：`hotfix/sprint{N}-{問題簡述}`
    → 指派對應代理修復
-   → 修復完成後 → merge 到 develop → QA 重跑
+   → 修復完成後 → merge 到 develop → **刪除 hotfix branch** → QA 重跑
+   ```bash
+   git checkout develop
+   git merge --no-ff hotfix/sprint{N}-{問題簡述}
+   git branch -d hotfix/sprint{N}-{問題簡述}
+   git worktree prune
+   ```
 
 3. **架構問題**（SA 需要介入）
    → 呼叫 SA Agent 分析問題根因

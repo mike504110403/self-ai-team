@@ -150,7 +150,7 @@ git checkout develop 2>/dev/null || git checkout -b develop
    - 檢查是否符合 sprint-{N}-interface.md 的合約
    - 若有問題 → 再次呼叫對應 Agent（帶上修改意見）修正
 
-2. **Merge 到 develop**
+2. **Merge 到 develop 並清理分支**
    ```bash
    git checkout develop
    git merge --no-ff feature/dba-sprint{N}-{功能}      # DBA 先 merge（Schema 優先）
@@ -159,8 +159,21 @@ git checkout develop 2>/dev/null || git checkout -b develop
    ```
    若有衝突 → 大腦自行解決或呼叫對應代理處理
 
-3. **觸發 QA**
-   所有 merge 完成後，立即呼叫 `/qa {N}` 流程。
+3. **刪除已合併的 feature branch + 清理 worktree**
+   ```bash
+   # 刪除本次 Sprint 的 feature branch（已合併就不需要了）
+   git branch -d feature/dba-sprint{N}-{功能}
+   git branch -d feature/backend-sprint{N}-{功能}
+   git branch -d feature/frontend-sprint{N}-{功能}
+   # 清理所有殘留的 worktree
+   git worktree prune
+   # 刪除所有已合併的 worktree-agent-* 分支
+   git branch --merged develop | grep "worktree-agent-" | xargs -r git branch -D
+   ```
+   **重要**：已合併的 feature branch 必須刪除，下個任務會開新的分支。
+
+4. **觸發 QA**
+   所有 merge 完成、分支清理完畢後，立即呼叫 `/qa {N}` 流程。
 
 ### Step 5：Telegram 通知
 
