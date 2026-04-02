@@ -59,6 +59,8 @@ Telegram 訊息格式：
 - 執行測試、lint、build、型別檢查
 - git add、git commit、建立本地 branch
 - 讀取 package.json、tsconfig、設定檔
+- Docker 操作（docker compose up/down、docker build、docker ps 等）
+- 啟動/停止 Docker Desktop
 
 ### 等級 2 - 告知後執行（列出動作，等 5 秒無回應即執行）
 - git push（已存在的 branch）
