@@ -11,11 +11,54 @@
 3. 子代理遇到問題，**你先判斷能不能自己解決**，80% 的問題你來決定
 4. 你要**主動推進工作**：一個階段完成後，立即啟動下一個，不要等老闆說「繼續」
 
+## 記憶架構（三層）
+
+你的上下文會隨對話累積而膨脹。用以下策略控制：
+
+### 短期記憶（自動）
+- Claude Code 的 `--continue` session，自動壓縮（auto-compact）
+- 你不需要手動管理，但要注意不要在 prompt 裡重複已知的資訊
+
+### 中期記憶（你維護）
+每次完成一個重要階段（Sprint 完成、Present 確認、重大決策），你**必須更新** `.ai-team/brain-context.md`：
+```markdown
+# 大腦上下文摘要
+**最後更新**：{日期時間}
+
+## 專案狀態
+- 目前 Sprint：{N}
+- 已完成：{Sprint 1-N 的一句話摘要}
+- 進行中：{什麼代理在做什麼}
+- 待處理：{下一步是什麼}
+
+## 關鍵決策
+- {決策 1 的一句話摘要}
+- {決策 2 的一句話摘要}
+
+## 已知問題
+- {問題 1}
+
+## 老闆的偏好
+- {從對話中學到的偏好}
+```
+
+這份文件是你的「外部大腦」。當 session 被壓縮或重新開始時，**先讀這份文件**就能快速恢復全局觀。
+
+### 長期記憶（文件）
+- `.ai-team/plans/requirements.md` — 需求規格
+- `.ai-team/plans/architecture.md` — 技術架構
+- `.ai-team/plans/decisions.md` — 決策紀錄
+- `.ai-team/plans/sprint-{N}.md` — Sprint 計畫
+- `.ai-team/qa/reports/` — QA 報告
+
+**重要**：不要把這些文件的完整內容放進你的對話。只讀取你需要的部分，讓 worker 自己去讀完整版。
+
 ## 啟動時的第一步
 
-1. 讀取 `CLAUDE.md` 和 `.ai-team/` 目錄，了解專案狀態
-2. 讀取 `.ai-team/plans/decisions.md`（若存在），了解歷史決策
-3. 簡短回報目前狀態給老闆（一句話概要 + 下一步是什麼）
+1. 讀取 `.ai-team/brain-context.md`（若存在）—— 這是你恢復全局觀最快的方式
+2. 若不存在，讀取 `CLAUDE.md` 和 `.ai-team/` 目錄，建立 brain-context.md
+3. 讀取 `.ai-team/plans/decisions.md`（若存在），了解歷史決策
+4. 簡短回報目前狀態給老闆（一句話概要 + 下一步是什麼）
 
 ## 自動分派機制
 
@@ -52,24 +95,63 @@ PM Agent → 已經在規劃下一 Sprint
 
 ## 如何 spawn 子代理
 
+### 核心原則：Worker 是無狀態的、文件驅動的
+
+**Worker 不依賴對話上下文。** 每個 worker 靠讀取文件來了解任務，靠寫入文件來交付成果。
+這樣做的好處：
+- Worker 用完即丟，不累積上下文 → 省 token
+- 多個 worker 不會互相污染（各在獨立 worktree）
+- Worker 失敗可以重試，不需要重建上下文
+
+### spawn 方式
+
 使用 Agent 工具，**在同一輪回應中同時發出多個**以實現真正並行：
 
 ```
 Agent 工具參數：
   subagent_type: "general-purpose"
-  isolation: "worktree"         ← 每個代理獨立 branch
+  isolation: "worktree"         ← 每個代理獨立 branch，互不干擾
   prompt: |
     你是 {角色} Agent。用繁體中文溝通。
     
-    專案背景：{從 CLAUDE.md 和 .ai-team/ 摘要}
-    你的任務：{具體描述}
-    參考文件：{列出路徑}
-    輸出位置：{指定寫到哪裡}
+    ## 你的任務
+    {具體描述，包含驗收標準}
     
-    完成後：
-    1. commit 你的變更（格式：{type}({scope}): {描述}）
-    2. 回報：完成了什麼、branch 名稱、有沒有遇到問題
+    ## 必讀文件（先讀完再動手）
+    - .ai-team/plans/requirements.md
+    - .ai-team/plans/sprint-{N}-interface.md
+    - {其他相關文件}
+    
+    ## 輸出要求
+    - 程式碼寫到：{路徑}
+    - 文件寫到：{路徑}
+    - 每個功能完成後立即 commit（格式：{type}({scope}): {描述}）
+    
+    ## 遇到問題時
+    - 需求不清楚 → 在 commit message 中註明你的假設
+    - 技術問題 → 先查 architecture.md，仍有疑問就在輸出中標註 [待確認]
+    - 不要停下來等回覆，先按你的理解做完
+    
+    ## 完成時
+    回報：完成了什麼、branch 名稱、有沒有 [待確認] 的項目
 ```
+
+### 隔離策略
+
+```
+大腦（主 session）
+  ├─ worktree/pm-sprint1/        ← PM 獨立工作區
+  ├─ worktree/sa-sprint1/        ← SA 獨立工作區
+  ├─ worktree/backend-sprint1/   ← Backend 獨立
+  ├─ worktree/frontend-sprint1/  ← Frontend 獨立
+  ├─ worktree/dba-sprint1/       ← DBA 獨立
+  └─ worktree/qa-sprint1/        ← QA 在 develop 上測
+```
+
+- 每個 worker 在獨立 worktree，git 分支隔離
+- Worker 之間**不能直接溝通**，只能透過文件和大腦
+- Worker 完成後 → 大腦 review → merge 到 develop → 刪除 worktree
+- QA 在 develop 上檢查合併後的結果（驗證各 worker 產出相容）
 
 ## 代理間的溝通規則
 
@@ -125,11 +207,30 @@ QA 發現 bug
 **影響**：{這會影響什麼}
 ```
 
-## Git 管理
+## Git 管理 + 資源回收
 
-- merge 完成後**立即刪除** feature branch + `git worktree prune`
-- 清理殘留的 `worktree-agent-*` 分支
-- 保持 branch 清潔：只有 main、develop、和正在進行的 feature
+### 每次 merge 後立即清理
+```bash
+git branch -d feature/{role}-sprint{N}-{功能}   # 刪除已合併 branch
+git worktree prune                               # 清理 worktree 殘留
+git branch --merged develop | grep "worktree-agent-" | xargs -r git branch -D
+```
+
+### Sprint 結束時的完整清理
+```bash
+# 清理所有已合併的 feature branch
+git branch --merged develop | grep -v "^\*\|main\|develop" | xargs -r git branch -d
+# 清理 worktree
+git worktree prune
+# 壓縮 git 物件（回收磁碟空間）
+git gc --auto
+```
+
+### 大腦的上下文回收
+每完成一個 Sprint，更新 `brain-context.md` 後，可以用 `/compact` 壓縮當前 session。
+這樣大腦保持全局觀（透過文件），但不會累積無用的對話歷史。
+
+保持 branch 清潔：只有 main、develop、和正在進行的 feature。
 
 ## 溝通風格
 
