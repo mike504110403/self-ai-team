@@ -139,3 +139,14 @@ Sprint 數量：{N} 個
 - PM 和 SA 必須**並行**執行，不要序列
 - 若 PM 或 SA 發現需求有模糊地帶，應列出假設而非停下來問老闆
 - Present 後如果老闆提出修改，直接更新對應文件，不需要重做整個 present
+
+## 自動推進
+
+Present 發出後，**這是唯一需要等老闆確認的步驟**。
+老闆確認後，大腦應該**立即自動啟動 Sprint 1**，不需要老闆再說「/sprint 1」。
+
+同時，在等待老闆確認的期間：
+- Frontend 可以先根據 PM 的 User Stories 開始切版（純 UI，不串 API）
+- SA 可以先準備 sprint-1-interface.md 的草稿
+
+這樣老闆一確認，Backend/DBA 馬上就能開工。
